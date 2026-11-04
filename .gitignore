@@ -1,0 +1,6 @@
+data/finance-db.json
+data/finance-db.json.tmp
+.env
+.env.local
+dist
+node_modules

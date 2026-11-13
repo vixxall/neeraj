@@ -1,12 +1,6 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://ai.google.dev/static/site-assets/images/share-ais-513315318.png" />
-</div>
+# Personal Finance Tracker
 
-# Run and deploy your AI Studio app
-
-This contains everything you need to run your app locally.
-
-View your app in AI Studio: https://ai.studio/apps/b3a6913f-d813-4176-ae6b-dc4de748acba
+Track transactions, budgets, savings goals, reports, and account preferences.
 
 ## Run Locally
 
@@ -15,13 +9,15 @@ View your app in AI Studio: https://ai.studio/apps/b3a6913f-d813-4176-ae6b-dc4de
 
 1. Install dependencies:
    `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+2. Start the frontend and API together:
+   `npm run dev:full`
+3. Open `http://localhost:3000`. The Vite development server proxies API requests to port 4000.
 
 ## Backend API
 
 The project includes a durable Express backend. It stores data in `data/finance-db.json` (ignored by git), hashes passwords with Node `scrypt`, and uses bearer-token sessions.
+Set `DATABASE_PATH` to use a different database file.
+Google/passkey sign-in and password reset require external identity and email-provider integrations and are not enabled in this app.
 
 ```bash
 npm run server
@@ -37,3 +33,13 @@ npm start
 ```
 
 Set `NODE_ENV=production`, `CLIENT_ORIGIN` to your allowed frontend origin, and optionally `PORT`. When the frontend and API use different origins, set `VITE_API_URL` before building the frontend.
+
+## Deploy to Render
+
+1. Push this repository to GitHub and create a Blueprint in Render from the repository.
+2. Render will use [`render.yaml`](./render.yaml) to build the Vite frontend and start the Express server as one web service.
+3. Open the Render service URL after its `/api/health` check passes.
+
+The included Blueprint uses Render's free plan. Its filesystem is ephemeral: the JSON database and user accounts can be lost when the service restarts, redeploys, or spins down. Use this only for demos or testing, not real financial records. For durable production data, switch to a persistent disk or a managed database before launch.
+
+The frontend and API share one origin, so cross-origin API access is disabled by default. If you later host the frontend on a separate domain, set `CLIENT_ORIGIN` to its exact origin(s), comma-separated; set `VITE_API_URL` to the API origin before building the frontend.

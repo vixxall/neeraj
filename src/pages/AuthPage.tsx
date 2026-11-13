@@ -36,17 +36,9 @@ export const AuthPage: React.FC<AuthPageProps> = ({
   const [confirmPassword, setConfirmPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
-  const [rememberMe, setRememberMe] = useState(true);
   const [capsLockActive, setCapsLockActive] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [authMethodLoading, setAuthMethodLoading] = useState<'google' | 'passkey' | 'github' | null>(null);
-
-  // Forgot password modal state
-  const [showForgotModal, setShowForgotModal] = useState(false);
-  const [forgotEmail, setForgotEmail] = useState('');
-  const [forgotSuccess, setForgotSuccess] = useState(false);
-  const [isSendingReset, setIsSendingReset] = useState(false);
 
   // Live Email Validation
   const isValidEmail = useMemo(() => {
@@ -85,7 +77,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({
     setCapsLockActive(e.getModifierState('CapsLock'));
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMessage('');
 
@@ -115,50 +107,13 @@ export const AuthPage: React.FC<AuthPageProps> = ({
     }
 
     setIsSubmitting(true);
-    setTimeout(async () => {
+    try {
+      await onLogin(email.trim(), name.trim() || 'Personal User', password, isRegister);
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : 'Unable to authenticate');
+    } finally {
       setIsSubmitting(false);
-      try {
-        await onLogin(email.trim(), name.trim() || 'Personal User', password, isRegister);
-      } catch (error) {
-        setErrorMessage(error instanceof Error ? error.message : 'Unable to authenticate');
-      }
-    }, 450);
-  };
-
-  const handleSocialAuth = (method: 'google' | 'passkey' | 'github') => {
-    setErrorMessage('');
-    setAuthMethodLoading(method);
-
-    setTimeout(async () => {
-      setAuthMethodLoading(null);
-      const simulatedEmail =
-        method === 'google'
-          ? 'user.google@gmail.com'
-          : method === 'passkey'
-          ? defaultProfile.email || 'biometric.user@fintech.local'
-          : 'developer@github.com';
-      const simulatedName =
-        method === 'google'
-          ? 'Google Verified User'
-          : method === 'passkey'
-          ? 'TouchID Secured User'
-          : 'GitHub Developer';
-      try {
-        await onLogin(simulatedEmail, simulatedName, 'DemoSocialPassword123!', false);
-      } catch (error) {
-        setErrorMessage(error instanceof Error ? error.message : 'Social sign-in is unavailable');
-      }
-    }, 600);
-  };
-
-  const handleSendReset = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!forgotEmail && !email) return;
-    setIsSendingReset(true);
-    setTimeout(() => {
-      setIsSendingReset(false);
-      setForgotSuccess(true);
-    }, 700);
+    }
   };
 
   return (
@@ -408,28 +363,6 @@ export const AuthPage: React.FC<AuthPageProps> = ({
             )}
 
             {/* Remember Me and Forgot Password Controls */}
-            <div className="flex items-center justify-between text-xs pt-1">
-              <label className="flex items-center gap-2 cursor-pointer select-none text-slate-800 font-bold hover:text-slate-950 transition-colors">
-                <input
-                  type="checkbox"
-                  checked={rememberMe}
-                  onChange={(e) => setRememberMe(e.target.checked)}
-                  className="rounded border-2 border-slate-900 text-blue-600 focus:ring-0"
-                />
-                <span>Remember me</span>
-              </label>
-
-              {!isRegister && (
-                <button
-                  type="button"
-                  onClick={() => setShowForgotModal(true)}
-                  className="text-blue-700 hover:text-blue-900 font-black transition-colors cursor-pointer"
-                >
-                  Forgot password?
-                </button>
-              )}
-            </div>
-
             {/* Primary Action Button */}
             <button
               type="submit"
@@ -450,12 +383,18 @@ export const AuthPage: React.FC<AuthPageProps> = ({
             </button>
           </form>
 
-          {/* Social / Fast Authentication Simulation Section */}
+          {!isRegister && (
+            <p className="mt-4 text-center text-xs font-bold text-slate-500">
+              Forgot your password? Contact your administrator to reset it.
+            </p>
+          )}
+
+          {/* External authentication providers require separate setup. */}
           <div className="mt-6">
             <div className="relative flex items-center justify-center">
               <div className="border-t-2 border-slate-900 w-full" />
               <span className="bg-white px-3 text-[11px] font-black text-slate-500 uppercase tracking-wider shrink-0">
-                Or fast verify with
+                Other sign-in methods (not configured)
               </span>
               <div className="border-t-2 border-slate-900 w-full" />
             </div>
@@ -464,49 +403,39 @@ export const AuthPage: React.FC<AuthPageProps> = ({
               {/* Passkey / Biometrics Button */}
               <button
                 type="button"
-                onClick={() => handleSocialAuth('passkey')}
-                disabled={authMethodLoading !== null}
-                className="cartoon-btn-secondary flex items-center justify-center gap-2 py-2 px-3 text-xs"
-                title="Sign in with device biometrics or passkey"
+                disabled
+                className="cartoon-btn-secondary flex items-center justify-center gap-2 py-2 px-3 text-xs opacity-50 cursor-not-allowed"
+                title="Passkey sign-in is not configured"
               >
-                {authMethodLoading === 'passkey' ? (
-                  <Loader2 className="w-3.5 h-3.5 animate-spin text-blue-600 stroke-[2.5]" />
-                ) : (
-                  <Fingerprint className="w-4 h-4 text-blue-600 stroke-[2.5]" />
-                )}
+                <Fingerprint className="w-4 h-4 text-blue-600 stroke-[2.5]" />
                 <span>Passkey</span>
               </button>
 
               {/* Google Fast Auth Button */}
               <button
                 type="button"
-                onClick={() => handleSocialAuth('google')}
-                disabled={authMethodLoading !== null}
-                className="cartoon-btn-secondary flex items-center justify-center gap-2 py-2 px-3 text-xs"
-                title="Continue with Google Account"
+                disabled
+                className="cartoon-btn-secondary flex items-center justify-center gap-2 py-2 px-3 text-xs opacity-50 cursor-not-allowed"
+                title="Google sign-in is not configured"
               >
-                {authMethodLoading === 'google' ? (
-                  <Loader2 className="w-3.5 h-3.5 animate-spin text-rose-500 stroke-[2.5]" />
-                ) : (
-                  <svg className="w-4 h-4" viewBox="0 0 24 24">
-                    <path
-                      fill="#EA4335"
-                      d="M12 5c1.6 0 3 .6 4.1 1.7l3.1-3.1C17.3 1.8 14.8 1 12 1 7.5 1 3.7 3.6 1.9 7.3l3.7 2.9C6.5 7.4 9 5 12 5z"
-                    />
-                    <path
-                      fill="#4285F4"
-                      d="M23.5 12.3c0-.8-.1-1.7-.2-2.3H12v4.6h6.5c-.3 1.5-1.1 2.8-2.4 3.7l3.7 2.9c2.2-2 3.7-5 3.7-8.9z"
-                    />
-                    <path
-                      fill="#FBBC05"
-                      d="M5.6 14.8c-.2-.7-.4-1.5-.4-2.3s.2-1.6.4-2.3L1.9 7.3C.7 9.7 0 12.3 0 15.1s.7 5.4 1.9 7.8l3.7-2.9z"
-                    />
-                    <path
-                      fill="#34A853"
-                      d="M12 23.5c3.2 0 6-1.1 8-3l-3.7-2.9c-1.1.7-2.5 1.2-4.3 1.2-3 0-5.5-2.4-6.4-5.2L1.9 16.5C3.7 20.2 7.5 23.5 12 23.5z"
-                    />
-                  </svg>
-                )}
+                <svg className="w-4 h-4" viewBox="0 0 24 24">
+                  <path
+                    fill="#EA4335"
+                    d="M12 5c1.6 0 3 .6 4.1 1.7l3.1-3.1C17.3 1.8 14.8 1 12 1 7.5 1 3.7 3.6 1.9 7.3l3.7 2.9C6.5 7.4 9 5 12 5z"
+                  />
+                  <path
+                    fill="#4285F4"
+                    d="M23.5 12.3c0-.8-.1-1.7-.2-2.3H12v4.6h6.5c-.3 1.5-1.1 2.8-2.4 3.7l3.7 2.9c2.2-2 3.7-5 3.7-8.9z"
+                  />
+                  <path
+                    fill="#FBBC05"
+                    d="M5.6 14.8c-.2-.7-.4-1.5-.4-2.3s.2-1.6.4-2.3L1.9 7.3C.7 9.7 0 12.3 0 15.1s.7 5.4 1.9 7.8l3.7-2.9z"
+                  />
+                  <path
+                    fill="#34A853"
+                    d="M12 23.5c3.2 0 6-1.1 8-3l-3.7-2.9c-1.1.7-2.5 1.2-4.3 1.2-3 0-5.5-2.4-6.4-5.2L1.9 16.5C3.7 20.2 7.5 23.5 12 23.5z"
+                  />
+                </svg>
                 <span>Google</span>
               </button>
             </div>
@@ -549,73 +478,10 @@ export const AuthPage: React.FC<AuthPageProps> = ({
         {/* Security badge footnote */}
         <div className="mt-4 flex items-center justify-center gap-1.5 text-xs text-slate-500 font-bold">
           <Shield className="w-3.5 h-3.5 text-slate-600 stroke-[2.5]" />
-          <span>Local storage encryption · Zero telemetry</span>
+          <span>Password-protected accounts · No analytics tracking</span>
         </div>
       </div>
 
-      {/* Interactive Forgot Password Modal */}
-      {showForgotModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in duration-150">
-          <div className="cartoon-card p-6 max-w-sm w-full text-left">
-            <h3 className="text-base font-black text-slate-900 mb-1">Reset Password</h3>
-            <p className="text-xs font-bold text-slate-500 mb-4">
-              Enter your account email to dispatch simulated recovery instructions.
-            </p>
-
-            {forgotSuccess ? (
-              <div className="p-3.5 bg-emerald-100 border-2 border-slate-900 rounded-xl text-emerald-950 text-xs mb-4 flex items-start gap-2.5 shadow-[2px_2px_0px_#0f172a]">
-                <CheckCircle2 className="w-4 h-4 text-emerald-700 shrink-0 mt-0.5 stroke-[2.5]" />
-                <div>
-                  <span className="font-black block">Password recovery initiated</span>
-                  <p className="text-[11px] text-emerald-800 mt-0.5 font-bold">
-                    Recovery simulation dispatched to{' '}
-                    <strong className="font-mono">{forgotEmail || email || 'your email'}</strong>.
-                  </p>
-                </div>
-              </div>
-            ) : (
-              <form onSubmit={handleSendReset} className="mb-4">
-                <label className="block text-xs font-black text-slate-900 mb-1.5">
-                  Your Account Email
-                </label>
-                <input
-                  type="email"
-                  required
-                  placeholder="name@example.com"
-                  value={forgotEmail || email}
-                  onChange={(e) => setForgotEmail(e.target.value)}
-                  className="cartoon-input w-full px-3 py-2 text-sm font-bold text-slate-900 font-mono"
-                  autoFocus
-                />
-              </form>
-            )}
-
-            <div className="flex justify-end gap-2 text-xs">
-              <button
-                type="button"
-                onClick={() => {
-                  setShowForgotModal(false);
-                  setForgotSuccess(false);
-                }}
-                className="cartoon-btn-secondary px-3.5 py-2 text-xs"
-              >
-                Close
-              </button>
-              {!forgotSuccess && (
-                <button
-                  type="button"
-                  onClick={handleSendReset}
-                  disabled={isSendingReset}
-                  className="cartoon-btn-primary px-3.5 py-2 text-xs flex items-center gap-1.5 disabled:opacity-70"
-                >
-                  {isSendingReset && <Loader2 className="w-3 h-3 animate-spin stroke-[2.5]" />}
-                  <span>Send Reset Link</span>
-                </button>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 };

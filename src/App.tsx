@@ -94,12 +94,37 @@ function PersonalFinanceApp() {
     storage.saveGoals(newGoals);
   }, []);
 
-  const updateProfile = useCallback((newProfile: UserProfile) => {
-    setProfile(newProfile);
-    storage.saveProfile(newProfile);
-    void api.saveProfile(newProfile).catch(() => undefined);
-    showToast('Profile and preferences updated', 'success');
+  const applyServerData = useCallback((remote: {
+    profile: UserProfile;
+    transactions: Transaction[];
+    budgets: Budget[];
+    goals: SavingsGoal[];
+  }) => {
+    setProfile(remote.profile);
+    storage.saveProfile(remote.profile);
+    updateTransactions(remote.transactions);
+    updateBudgets(remote.budgets);
+    updateGoals(remote.goals);
+  }, [updateTransactions, updateBudgets, updateGoals]);
+
+  const reportApiError = useCallback((action: string, error: unknown) => {
+    const detail = error instanceof Error ? error.message : 'Unexpected server error';
+    console.error(`Unable to ${action}`, error);
+    showToast(`Unable to ${action}: ${detail}`, 'error');
   }, [showToast]);
+
+  const updateProfile = useCallback(async (newProfile: UserProfile): Promise<boolean> => {
+    try {
+      const savedProfile = await api.saveProfile(newProfile);
+      setProfile(savedProfile);
+      storage.saveProfile(savedProfile);
+      showToast('Profile and preferences updated', 'success');
+      return true;
+    } catch (error) {
+      reportApiError('save profile', error);
+      return false;
+    }
+  }, [reportApiError, showToast]);
 
   // Derived KPIs, Alerts & Insights
   const kpis = useMemo(() => calculateKPIStats(transactions), [transactions]);
@@ -112,21 +137,52 @@ function PersonalFinanceApp() {
     [transactions, budgets, goals, kpis]
   );
 
+  useEffect(() => {
+    if (!auth.isAuthenticated) return;
+    if (!api.token()) {
+      const signedOut = { isAuthenticated: false, userEmail: '', userName: '' };
+      setAuth(signedOut);
+      storage.saveAuth(signedOut);
+      return;
+    }
+
+    let active = true;
+    void api.dashboard()
+      .then(remote => {
+        if (active) applyServerData(remote);
+      })
+      .catch(error => {
+        if (!active) return;
+        api.clearToken();
+        const signedOut = { isAuthenticated: false, userEmail: '', userName: '' };
+        setAuth(signedOut);
+        storage.saveAuth(signedOut);
+        reportApiError('restore your session', error);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [auth.isAuthenticated, applyServerData, reportApiError]);
+
   // Auth Handlers
   const handleLogin = async (email: string, name: string, password: string, register: boolean) => {
-    const result = await api.login(email, password, name, register);
-    const remote = await api.dashboard();
-    const newAuth = { isAuthenticated: true, userEmail: email, userName: name };
-    setAuth(newAuth);
-    storage.saveAuth(newAuth);
-    const updatedProfile = { ...remote.profile, email: result.user.email, name: result.user.name };
-    setProfile(updatedProfile);
-    storage.saveProfile(updatedProfile);
-    setTransactions(remote.transactions);
-    setBudgets(remote.budgets);
-    setGoals(remote.goals);
-    setCurrentPage('dashboard');
-    showToast(`Welcome, ${name}! Logged in to Dashboard.`, 'success');
+    try {
+      const result = await api.login(email, password, name, register);
+      const remote = await api.dashboard();
+      const newAuth = { isAuthenticated: true, userEmail: result.user.email, userName: result.user.name };
+      setAuth(newAuth);
+      storage.saveAuth(newAuth);
+      applyServerData({
+        ...remote,
+        profile: { ...remote.profile, email: result.user.email, name: result.user.name },
+      });
+      setCurrentPage('dashboard');
+      showToast(`Welcome, ${result.user.name}! Logged in to Dashboard.`, 'success');
+    } catch (error) {
+      api.clearToken();
+      throw error;
+    }
   };
 
   const handleLogout = () => {
@@ -141,160 +197,183 @@ function PersonalFinanceApp() {
   // Transaction Handlers
   const handleSaveTransaction = async (
     txData: Omit<Transaction, 'id' | 'createdAt'> & { id?: string }
-  ) => {
-    if (txData.id) {
-      // Edit existing
-      const updated = transactions.map((t) =>
-        t.id === txData.id ? { ...t, ...txData } : t
-      );
-      updateTransactions(updated);
-      void api.update<Transaction>('transactions', txData.id, txData).catch(() => undefined);
-      showToast('Transaction updated successfully.', 'success');
-    } else {
-      // Create new
-      const newTx: Transaction = {
-        ...txData,
-        id: `tx-${Date.now()}`,
-        createdAt: Date.now(),
-      };
-      updateTransactions([newTx, ...transactions]);
-      void api.create<Transaction>('transactions', txData).catch(() => undefined);
-      showToast(
-        `${newTx.type === 'income' ? 'Income' : 'Expense'} recorded successfully.`,
-        'success'
-      );
+  ): Promise<boolean> => {
+    try {
+      if (txData.id) {
+        const saved = await api.update<Transaction>('transactions', txData.id, txData);
+        updateTransactions(transactions.map(t => t.id === saved.id ? saved : t));
+        showToast('Transaction updated successfully.', 'success');
+      } else {
+        const saved = await api.create<Transaction>('transactions', txData);
+        updateTransactions([saved, ...transactions]);
+        showToast(`${saved.type === 'income' ? 'Income' : 'Expense'} recorded successfully.`, 'success');
+      }
+      setEditingTransaction(null);
+      return true;
+    } catch (error) {
+      reportApiError('save transaction', error);
+      return false;
     }
-    setEditingTransaction(null);
   };
 
-  const handleConfirmDeleteTransaction = () => {
-    if (!deletingTxId) return;
-    const updated = transactions.filter((t) => t.id !== deletingTxId);
-    updateTransactions(updated);
-    void api.remove('transactions', deletingTxId).catch(() => undefined);
-    setDeletingTxId(null);
-    showToast('Transaction deleted.', 'info');
+  const handleConfirmDeleteTransaction = async (): Promise<boolean> => {
+    if (!deletingTxId) return false;
+    try {
+      await api.remove('transactions', deletingTxId);
+      updateTransactions(transactions.filter(t => t.id !== deletingTxId));
+      setDeletingTxId(null);
+      showToast('Transaction deleted.', 'info');
+      return true;
+    } catch (error) {
+      reportApiError('delete transaction', error);
+      return false;
+    }
   };
 
   // Budget Handlers
   const handleSaveBudget = async (
     budgetData: Omit<Budget, 'id' | 'createdAt'> & { id?: string }
-  ) => {
-    if (budgetData.id) {
-      const updated = budgets.map((b) =>
-        b.id === budgetData.id ? { ...b, ...budgetData } : b
-      );
-      updateBudgets(updated);
-      void api.update<Budget>('budgets', budgetData.id, budgetData).catch(() => undefined);
-      showToast('Budget limit updated successfully.', 'success');
-    } else {
-      // Check if category already has a budget
-      const existing = budgets.find((b) => b.category === budgetData.category);
-      if (existing) {
-        const updated = budgets.map((b) =>
-          b.category === budgetData.category
-            ? { ...b, monthlyLimit: budgetData.monthlyLimit }
-            : b
-        );
-        updateBudgets(updated);
-        void api.create<Budget>('budgets', budgetData).catch(() => undefined);
-        showToast(`Updated existing ${budgetData.category} budget limit.`, 'success');
+  ): Promise<boolean> => {
+    try {
+      if (budgetData.id) {
+        const saved = await api.update<Budget>('budgets', budgetData.id, budgetData);
+        updateBudgets(budgets.map(b => b.id === saved.id ? saved : b));
+        showToast('Budget limit updated successfully.', 'success');
       } else {
-        const newBudget: Budget = {
-          ...budgetData,
-          id: `bg-${Date.now()}`,
-          createdAt: Date.now(),
-        };
-        updateBudgets([...budgets, newBudget]);
-        void api.create<Budget>('budgets', budgetData).catch(() => undefined);
-        showToast('Budget created successfully.', 'success');
+        const existing = budgets.find(b => b.category === budgetData.category);
+        if (existing) {
+          const saved = await api.update<Budget>('budgets', existing.id, budgetData);
+          updateBudgets(budgets.map(b => b.id === saved.id ? saved : b));
+          showToast(`Updated existing ${budgetData.category} budget limit.`, 'success');
+        } else {
+          const saved = await api.create<Budget>('budgets', budgetData);
+          updateBudgets([...budgets, saved]);
+          showToast('Budget created successfully.', 'success');
+        }
       }
+      setEditingBudget(null);
+      return true;
+    } catch (error) {
+      reportApiError('save budget', error);
+      return false;
     }
-    setEditingBudget(null);
   };
 
-  const handleConfirmDeleteBudget = () => {
-    if (!deletingBudgetId) return;
-    const updated = budgets.filter((b) => b.id !== deletingBudgetId);
-    updateBudgets(updated);
-    void api.remove('budgets', deletingBudgetId).catch(() => undefined);
-    setDeletingBudgetId(null);
-    showToast('Budget removed.', 'info');
+  const handleConfirmDeleteBudget = async (): Promise<boolean> => {
+    if (!deletingBudgetId) return false;
+    try {
+      await api.remove('budgets', deletingBudgetId);
+      updateBudgets(budgets.filter(b => b.id !== deletingBudgetId));
+      setDeletingBudgetId(null);
+      showToast('Budget removed.', 'info');
+      return true;
+    } catch (error) {
+      reportApiError('delete budget', error);
+      return false;
+    }
+  };
+
+  const handleQuickAdjustBudget = async (budgetId: string, delta: number) => {
+    const budget = budgets.find(item => item.id === budgetId);
+    if (!budget) return;
+    try {
+      const saved = await api.update<Budget>('budgets', budgetId, {
+        ...budget,
+        monthlyLimit: Math.max(100, budget.monthlyLimit + delta),
+      });
+      updateBudgets(budgets.map(item => item.id === saved.id ? saved : item));
+      showToast(`Budget limit updated (${delta >= 0 ? '+' : ''}${profile.currency}${delta.toLocaleString('en-IN')})`, 'success');
+    } catch (error) {
+      reportApiError('adjust budget', error);
+    }
   };
 
   // Savings Goal Handlers
   const handleSaveGoal = async (
     goalData: Omit<SavingsGoal, 'id' | 'createdAt'> & { id?: string }
-  ) => {
-    if (goalData.id) {
-      const updated = goals.map((g) =>
-        g.id === goalData.id ? { ...g, ...goalData } : g
-      );
-      updateGoals(updated);
-      void api.update<SavingsGoal>('goals', goalData.id, goalData).catch(() => undefined);
-      showToast('Savings goal updated.', 'success');
-    } else {
-      const newGoal: SavingsGoal = {
-        ...goalData,
-        id: `goal-${Date.now()}`,
-        createdAt: Date.now(),
-      };
-      updateGoals([...goals, newGoal]);
-      void api.create<SavingsGoal>('goals', goalData).catch(() => undefined);
-      showToast('Savings goal created successfully.', 'success');
-    }
-    setEditingGoal(null);
-  };
-
-  const handleAddFundsToGoal = (goalId: string, addedAmount: number) => {
-    const updated = goals.map((g) => {
-      if (g.id === goalId) {
-        const newAmt = g.currentAmount + addedAmount;
-        return { ...g, currentAmount: newAmt };
+  ): Promise<boolean> => {
+    try {
+      if (goalData.id) {
+        const saved = await api.update<SavingsGoal>('goals', goalData.id, goalData);
+        updateGoals(goals.map(g => g.id === saved.id ? saved : g));
+        showToast('Savings goal updated.', 'success');
+      } else {
+        const saved = await api.create<SavingsGoal>('goals', goalData);
+        updateGoals([...goals, saved]);
+        showToast('Savings goal created successfully.', 'success');
       }
-      return g;
-    });
-    updateGoals(updated);
-    void api.addFunds(goalId, addedAmount).catch(() => undefined);
-    showToast(`Added ${profile.currency}${addedAmount.toLocaleString('en-IN')} to goal!`, 'success');
+      setEditingGoal(null);
+      return true;
+    } catch (error) {
+      reportApiError('save savings goal', error);
+      return false;
+    }
   };
 
-  const handleConfirmDeleteGoal = () => {
-    if (!deletingGoalId) return;
-    const updated = goals.filter((g) => g.id !== deletingGoalId);
-    updateGoals(updated);
-    void api.remove('goals', deletingGoalId).catch(() => undefined);
-    setDeletingGoalId(null);
-    showToast('Savings goal deleted.', 'info');
+  const handleAddFundsToGoal = async (goalId: string, addedAmount: number): Promise<boolean> => {
+    try {
+      const saved = await api.addFunds(goalId, addedAmount);
+      updateGoals(goals.map(g => g.id === saved.id ? saved : g));
+      showToast(`Added ${profile.currency}${addedAmount.toLocaleString('en-IN')} to goal!`, 'success');
+      return true;
+    } catch (error) {
+      reportApiError('add funds to savings goal', error);
+      return false;
+    }
+  };
+
+  const handleConfirmDeleteGoal = async (): Promise<boolean> => {
+    if (!deletingGoalId) return false;
+    try {
+      await api.remove('goals', deletingGoalId);
+      updateGoals(goals.filter(g => g.id !== deletingGoalId));
+      setDeletingGoalId(null);
+      showToast('Savings goal deleted.', 'info');
+      return true;
+    } catch (error) {
+      reportApiError('delete savings goal', error);
+      return false;
+    }
   };
 
   // Data Lifecycle Actions
-  const handleLoadDemoData = () => {
-    const loaded = storage.loadDemoData();
-    setTransactions(loaded.transactions);
-    setBudgets(loaded.budgets);
-    setGoals(loaded.goals);
-    setProfile(loaded.profile);
-    showToast('Demo dataset loaded with 23 realistic transactions.', 'success');
+  const handleLoadDemoData = async (): Promise<boolean> => {
+    try {
+      const remote = await api.loadDemoData();
+      applyServerData(remote);
+      showToast('Demo dataset loaded.', 'success');
+      return true;
+    } catch (error) {
+      reportApiError('load demo data', error);
+      return false;
+    }
   };
 
-  const handleClearData = () => {
-    const cleared = storage.clearAllData();
-    setTransactions(cleared.transactions);
-    setBudgets(cleared.budgets);
-    setGoals(cleared.goals);
-    showToast('All transaction, budget, and goal records cleared.', 'info');
+  const handleClearData = async (): Promise<boolean> => {
+    try {
+      await api.clearData();
+      updateTransactions([]);
+      updateBudgets([]);
+      updateGoals([]);
+      showToast('All transaction, budget, and goal records cleared.', 'info');
+      return true;
+    } catch (error) {
+      reportApiError('clear data', error);
+      return false;
+    }
   };
 
-  const handleResetApp = () => {
-    localStorage.clear();
-    const loaded = storage.loadDemoData();
-    setTransactions(loaded.transactions);
-    setBudgets(loaded.budgets);
-    setGoals(loaded.goals);
-    setProfile(loaded.profile);
-    setCurrentPage('dashboard');
-    showToast('Application reset to factory state.', 'info');
+  const handleResetApp = async (): Promise<boolean> => {
+    try {
+      const remote = await api.loadDemoData();
+      applyServerData(remote);
+      setCurrentPage('dashboard');
+      showToast('Demo data restored.', 'success');
+      return true;
+    } catch (error) {
+      reportApiError('restore demo data', error);
+      return false;
+    }
   };
 
   const handleExportJSON = () => {
@@ -387,13 +466,7 @@ function PersonalFinanceApp() {
                 setEditingBudget(b);
                 setIsBudgetModalOpen(true);
               }}
-              onQuickAdjustBudget={(budgetId, delta) => {
-                const updated = budgets.map((b) =>
-                  b.id === budgetId ? { ...b, monthlyLimit: Math.max(100, b.monthlyLimit + delta) } : b
-                );
-                updateBudgets(updated);
-                showToast(`Budget limit updated (+${profile.currency}${delta.toLocaleString('en-IN')})`, 'success');
-              }}
+              onQuickAdjustBudget={(budgetId, delta) => { void handleQuickAdjustBudget(budgetId, delta); }}
               onEditGoal={(g) => {
                 setEditingGoal(g);
                 setIsGoalModalOpen(true);

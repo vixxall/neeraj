@@ -5,7 +5,7 @@ import { Modal } from '../common/Modal';
 interface SavingsGoalModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onSave: (goal: Omit<SavingsGoal, 'id' | 'createdAt'> & { id?: string }) => void;
+  onSave: (goal: Omit<SavingsGoal, 'id' | 'createdAt'> & { id?: string }) => Promise<boolean>;
   initialGoal?: SavingsGoal | null;
   currency?: string;
 }
@@ -23,6 +23,7 @@ export const SavingsGoalModal: React.FC<SavingsGoalModalProps> = ({
   const [targetDate, setTargetDate] = useState<string>('');
   const [category, setCategory] = useState<string>('General');
   const [notes, setNotes] = useState<string>('');
+  const [isSaving, setIsSaving] = useState(false);
 
   const [errors, setErrors] = useState<Record<string, string>>({});
 
@@ -73,21 +74,25 @@ export const SavingsGoalModal: React.FC<SavingsGoalModalProps> = ({
     return Object.keys(errs).length === 0;
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!validate()) return;
 
-    onSave({
-      ...(initialGoal?.id ? { id: initialGoal.id } : {}),
-      name: name.trim(),
-      targetAmount: parseFloat(targetAmount),
-      currentAmount: parseFloat(currentAmount) || 0,
-      targetDate,
-      category,
-      notes: notes.trim() || undefined,
-    });
-
-    onClose();
+    setIsSaving(true);
+    try {
+      const saved = await onSave({
+        ...(initialGoal?.id ? { id: initialGoal.id } : {}),
+        name: name.trim(),
+        targetAmount: parseFloat(targetAmount),
+        currentAmount: parseFloat(currentAmount) || 0,
+        targetDate,
+        category,
+        notes: notes.trim() || undefined,
+      });
+      if (saved) onClose();
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   return (
@@ -223,9 +228,10 @@ export const SavingsGoalModal: React.FC<SavingsGoalModalProps> = ({
           </button>
           <button
             type="submit"
-            className="cartoon-btn-primary px-5 py-2 text-xs"
+            disabled={isSaving}
+            className="cartoon-btn-primary px-5 py-2 text-xs disabled:opacity-70"
           >
-            {initialGoal ? 'Update Goal' : 'Create Goal'}
+            {isSaving ? 'Saving...' : initialGoal ? 'Update Goal' : 'Create Goal'}
           </button>
         </div>
       </form>

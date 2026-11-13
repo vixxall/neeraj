@@ -16,12 +16,12 @@ import { ConfirmDialog } from '../components/common/ConfirmDialog';
 
 interface SettingsPageProps {
   profile: UserProfile;
-  onSaveProfile: (profile: UserProfile) => void;
+  onSaveProfile: (profile: UserProfile) => Promise<boolean>;
   onExportJSON: () => void;
   onExportCSV: () => void;
-  onLoadDemoData: () => void;
-  onClearData: () => void;
-  onResetApp: () => void;
+  onLoadDemoData: () => Promise<boolean>;
+  onClearData: () => Promise<boolean>;
+  onResetApp: () => Promise<boolean>;
 }
 
 export const SettingsPage: React.FC<SettingsPageProps> = ({
@@ -40,11 +40,12 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
   const [showClearConfirm, setShowClearConfirm] = useState(false);
   const [showResetConfirm, setShowResetConfirm] = useState(false);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    onSaveProfile(formData);
-    setIsSaved(true);
-    setTimeout(() => setIsSaved(false), 3000);
+    if (await onSaveProfile(formData)) {
+      setIsSaved(true);
+      setTimeout(() => setIsSaved(false), 3000);
+    }
   };
 
   return (
@@ -273,12 +274,12 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
           <div className="p-1.5 rounded-xl bg-purple-200 border-2 border-slate-900 text-slate-900 shadow-[1px_1px_0px_#0f172a]">
             <Database className="w-4 h-4 stroke-[2.5]" />
           </div>
-          <h3 className="text-sm font-black text-slate-900">Local Data Management</h3>
+          <h3 className="text-sm font-black text-slate-900">Data Management</h3>
         </div>
 
         <p className="text-xs font-bold text-slate-500">
-          All financial data is stored locally in your browser's private storage. You can backup, restore,
-          or reset your ledger anytime.
+          Financial records are stored in the application database and cached in this browser. You can back up,
+          restore demo data, or clear your records anytime.
         </p>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5 pt-2">
@@ -312,7 +313,7 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
           >
             <Trash2 className="w-5 h-5 text-amber-700 mb-2 stroke-[2.5]" />
             <div className="text-xs font-black text-slate-900">Clear Records</div>
-            <div className="text-[10px] font-bold text-slate-500 mt-0.5">Wipe transactions & goals</div>
+            <div className="text-[10px] font-bold text-slate-500 mt-0.5">Wipe transactions, budgets & goals</div>
           </button>
 
           {/* Reset App */}
@@ -322,8 +323,8 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
             className="cartoon-card-sm p-3.5 bg-rose-50/80 hover:bg-rose-100/80 transition-colors text-left cursor-pointer"
           >
             <Trash2 className="w-5 h-5 text-rose-700 mb-2 stroke-[2.5]" />
-            <div className="text-xs font-black text-rose-950">Reset Application</div>
-            <div className="text-[10px] font-bold text-rose-700 mt-0.5">Clear all settings</div>
+            <div className="text-xs font-black text-rose-950">Restore Demo Records</div>
+            <div className="text-[10px] font-bold text-rose-700 mt-0.5">Replace current records with sample data</div>
           </button>
         </div>
       </div>
@@ -333,8 +334,8 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
         isOpen={showClearConfirm}
         onClose={() => setShowClearConfirm(false)}
         onConfirm={onClearData}
-        title="Clear All Transaction Data?"
-        message="This will delete all current transactions, category budgets, and savings goals from your browser storage. You can restore sample records anytime using 'Load Demo Data'."
+        title="Clear All Financial Records?"
+        message="This will delete all transactions, category budgets, and savings goals for your account. You can restore sample records anytime using 'Load Demo Data'."
         confirmText="Clear Data"
         isDestructive={true}
       />
@@ -343,9 +344,9 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
         isOpen={showResetConfirm}
         onClose={() => setShowResetConfirm(false)}
         onConfirm={onResetApp}
-        title="Reset Entire Application?"
-        message="This will wipe all preferences, profile information, and transactions, returning the dashboard to a clean initial state."
-        confirmText="Reset App"
+        title="Restore Demo Records?"
+        message="This replaces your current transactions, budgets, and savings goals with the sample dataset. Your account profile and preferences will remain unchanged."
+        confirmText="Restore Demo Data"
         isDestructive={true}
       />
     </div>

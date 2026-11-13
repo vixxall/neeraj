@@ -8,7 +8,7 @@ interface AddFundsModalProps {
   isOpen: boolean;
   onClose: () => void;
   goal: SavingsGoal | null;
-  onAddFunds: (goalId: string, addedAmount: number) => void;
+  onAddFunds: (goalId: string, addedAmount: number) => Promise<boolean>;
   currency?: string;
 }
 
@@ -21,12 +21,13 @@ export const AddFundsModal: React.FC<AddFundsModalProps> = ({
 }) => {
   const [amount, setAmount] = useState<string>('');
   const [error, setError] = useState<string>('');
+  const [isSaving, setIsSaving] = useState(false);
 
   if (!goal) return null;
 
   const remaining = Math.max(0, goal.targetAmount - goal.currentAmount);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     const num = parseFloat(amount);
     if (!amount || isNaN(num) || num <= 0) {
@@ -34,24 +35,26 @@ export const AddFundsModal: React.FC<AddFundsModalProps> = ({
       return;
     }
 
-    const newTotal = goal.currentAmount + num;
-    if (newTotal >= goal.targetAmount) {
-      // Fire confetti!
-      try {
-        confetti({
-          particleCount: 100,
-          spread: 70,
-          origin: { y: 0.6 },
-        });
-      } catch (err) {
-        // ignore if canvas unavailable
+    setIsSaving(true);
+    try {
+      if (!await onAddFunds(goal.id, num)) return;
+      if (goal.currentAmount + num >= goal.targetAmount) {
+        try {
+          confetti({
+            particleCount: 100,
+            spread: 70,
+            origin: { y: 0.6 },
+          });
+        } catch (error) {
+          console.error('Unable to render goal completion animation', error);
+        }
       }
+      setAmount('');
+      setError('');
+      onClose();
+    } finally {
+      setIsSaving(false);
     }
-
-    onAddFunds(goal.id, num);
-    setAmount('');
-    setError('');
-    onClose();
   };
 
   return (
@@ -113,9 +116,10 @@ export const AddFundsModal: React.FC<AddFundsModalProps> = ({
           </button>
           <button
             type="submit"
-            className="cartoon-btn-green px-5 py-2 text-xs"
+            disabled={isSaving}
+            className="cartoon-btn-green px-5 py-2 text-xs disabled:opacity-70"
           >
-            + Add to Goal
+            {isSaving ? 'Saving...' : '+ Add to Goal'}
           </button>
         </div>
       </form>

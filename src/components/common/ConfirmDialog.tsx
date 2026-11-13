@@ -1,11 +1,11 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { AlertTriangle } from 'lucide-react';
 import { Modal } from './Modal';
 
 interface ConfirmDialogProps {
   isOpen: boolean;
   onClose: () => void;
-  onConfirm: () => void;
+  onConfirm: () => Promise<boolean>;
   title: string;
   message: string;
   confirmText?: string;
@@ -23,6 +23,17 @@ export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
   cancelText = 'Cancel',
   isDestructive = true,
 }) => {
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const handleConfirm = async () => {
+    setIsSubmitting(true);
+    try {
+      if (await onConfirm()) onClose();
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
   return (
     <Modal isOpen={isOpen} onClose={onClose} title={title} maxWidth="sm">
       <div className="flex flex-col gap-4">
@@ -47,11 +58,9 @@ export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
           </button>
           <button
             type="button"
-            onClick={() => {
-              onConfirm();
-              onClose();
-            }}
-            className={isDestructive ? 'cartoon-btn-coral px-4 py-2 text-xs' : 'cartoon-btn-primary px-4 py-2 text-xs'}
+            onClick={() => { void handleConfirm(); }}
+            disabled={isSubmitting}
+            className={`${isDestructive ? 'cartoon-btn-coral' : 'cartoon-btn-primary'} px-4 py-2 text-xs disabled:opacity-70`}
           >
             {confirmText}
           </button>

@@ -5,7 +5,7 @@ import { Modal } from '../common/Modal';
 interface TransactionModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onSave: (transaction: Omit<Transaction, 'id' | 'createdAt'> & { id?: string }) => void;
+  onSave: (transaction: Omit<Transaction, 'id' | 'createdAt'> & { id?: string }) => Promise<boolean>;
   initialTransaction?: Transaction | null;
   defaultType?: TransactionType;
   currency?: string;
@@ -55,6 +55,7 @@ export const TransactionModal: React.FC<TransactionModalProps> = ({
   const [amount, setAmount] = useState<string>('');
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('UPI');
   const [notes, setNotes] = useState<string>('');
+  const [isSaving, setIsSaving] = useState(false);
 
   const [errors, setErrors] = useState<Record<string, string>>({});
 
@@ -114,11 +115,13 @@ export const TransactionModal: React.FC<TransactionModalProps> = ({
     return Object.keys(errs).length === 0;
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!validate()) return;
 
-    onSave({
+    setIsSaving(true);
+    try {
+      const saved = await onSave({
       ...(initialTransaction?.id ? { id: initialTransaction.id } : {}),
       date,
       type,
@@ -127,9 +130,11 @@ export const TransactionModal: React.FC<TransactionModalProps> = ({
       amount: parseFloat(amount),
       paymentMethod,
       notes: notes.trim() || undefined,
-    });
-
-    onClose();
+      });
+      if (saved) onClose();
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   const activeCategories = type === 'income' ? INCOME_CATEGORIES : EXPENSE_CATEGORIES;
@@ -299,9 +304,10 @@ export const TransactionModal: React.FC<TransactionModalProps> = ({
           </button>
           <button
             type="submit"
-            className="cartoon-btn-primary px-5 py-2 text-xs"
+            disabled={isSaving}
+            className="cartoon-btn-primary px-5 py-2 text-xs disabled:opacity-70"
           >
-            {initialTransaction ? 'Save Changes' : 'Record Transaction'}
+            {isSaving ? 'Saving...' : initialTransaction ? 'Save Changes' : 'Record Transaction'}
           </button>
         </div>
       </form>

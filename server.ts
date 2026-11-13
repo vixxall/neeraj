@@ -14,10 +14,17 @@ type Session = { token: string; userId: string; expiresAt: number };
 type Database = { users: User[]; sessions: Session[]; profiles: Record<string, UserProfile>; transactions: Record<string, Transaction[]>; budgets: Record<string, Budget[]>; goals: Record<string, SavingsGoal[]> };
 type AuthedRequest = Request & { userId?: string };
 const root = path.dirname(fileURLToPath(import.meta.url));
-const dbPath = path.join(root, 'data', 'finance-db.json');
+const dbPath = process.env.DATABASE_PATH || path.join(root, 'data', 'finance-db.json');
 const port = Number(process.env.PORT ?? 4000);
 const emptyDb = (): Database => ({ users: [], sessions: [], profiles: {}, transactions: {}, budgets: {}, goals: {} });
-function readDb(): Database { try { return JSON.parse(fs.readFileSync(dbPath, 'utf8')); } catch { return emptyDb(); } }
+function readDb(): Database {
+  try {
+    return JSON.parse(fs.readFileSync(dbPath, 'utf8')) as Database;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return emptyDb();
+    throw error;
+  }
+}
 let db = readDb();
 function writeDb() { fs.mkdirSync(path.dirname(dbPath), { recursive: true }); const tmp = `${dbPath}.tmp`; fs.writeFileSync(tmp, JSON.stringify(db, null, 2)); fs.renameSync(tmp, dbPath); }
 const makeId = (p: string) => `${p}-${crypto.randomUUID()}`;
@@ -27,11 +34,17 @@ function validPassword(password: string, stored: string) { const [salt, digest] 
 function seedUser(user: User) { db.profiles[user.id] = { ...INITIAL_PROFILE, name: user.name, email: user.email }; db.transactions[user.id] = INITIAL_TRANSACTIONS.map(x => ({ ...x })); db.budgets[user.id] = INITIAL_BUDGETS.map(x => ({ ...x })); db.goals[user.id] = INITIAL_GOALS.map(x => ({ ...x })); }
 function auth(req: AuthedRequest, res: Response, next: NextFunction) { const token = req.header('authorization')?.replace(/^Bearer\s+/i, ''); const session = token && db.sessions.find(s => s.token === token && s.expiresAt > Date.now()); if (!session) return res.status(401).json({ error: 'Authentication required' }); req.userId = session.userId; next(); }
 function data(req: AuthedRequest) { const userId = req.userId!; return { userId, profile: db.profiles[userId], transactions: db.transactions[userId] ?? [], budgets: db.budgets[userId] ?? [], goals: db.goals[userId] ?? [] }; }
-function body(req: Request, res: Response) { if (!req.body || typeof req.body !== 'object') { res.status(400).json({ error: 'JSON object body required' }); return false; } return true; }
+function body(req: Request, res: Response) { if (!req.body || typeof req.body !== 'object' || Array.isArray(req.body)) { res.status(400).json({ error: 'JSON object body required' }); return false; } return true; }
 const nonNegative = (x: unknown) => typeof x === 'number' && Number.isFinite(x) && x >= 0;
+const isRecord = (x: unknown): x is Record<string, unknown> => !!x && typeof x === 'object' && !Array.isArray(x);
+type CollectionPayload<T> = Omit<T, 'id' | 'createdAt'>;
 
 const app = express();
-app.use(cors({ origin: process.env.CLIENT_ORIGIN?.split(',') ?? true }));
+const allowedOrigins = process.env.CLIENT_ORIGIN
+  ?.split(',')
+  .map(origin => origin.trim())
+  .filter(Boolean);
+app.use(cors({ origin: allowedOrigins?.length ? allowedOrigins : false }));
 app.use(express.json({ limit: '1mb' }));
 app.use(express.static(path.join(root, 'dist')));
 app.get('/api/health', (_req, res) => res.json({ status: 'ok', service: 'personal-finance-api', timestamp: new Date().toISOString() }));
@@ -46,19 +59,44 @@ app.use('/api', auth);
 app.get('/api/profile', (req: AuthedRequest, res) => res.json(data(req).profile));
 app.put('/api/profile', (req: AuthedRequest, res) => { if (!body(req, res)) return; const current = data(req).profile; const profile = { ...current, ...req.body, notifications: { ...current.notifications, ...(req.body.notifications ?? {}) } }; db.profiles[req.userId!] = profile; const user = db.users.find(u => u.id === req.userId)!; user.name = profile.name; user.email = profile.email; writeDb(); res.json(profile); });
 
-function collection<T extends { id: string; createdAt: number }>(name: 'transactions' | 'budgets' | 'goals', prefix: string, validate: (x: any) => boolean) {
-  app.get(`/api/${name}`, (req: AuthedRequest, res) => { const q = typeof req.query.q === 'string' ? req.query.q.toLowerCase() : ''; const items = data(req)[name] as T[]; res.json(q ? items.filter(x => JSON.stringify(x).toLowerCase().includes(q)) : items); });
-  app.post(`/api/${name}`, (req: AuthedRequest, res) => { if (!body(req, res)) return; if (!validate(req.body)) return res.status(400).json({ error: `Invalid ${name.slice(0, -1)} payload` }); const item = { ...req.body, id: makeId(prefix), createdAt: Date.now() } as T; (db[name][req.userId!] ??= []).unshift(item); writeDb(); res.status(201).json(item); });
-  app.put(`/api/${name}/:id`, (req: AuthedRequest, res) => { if (!body(req, res)) return; if (!validate(req.body)) return res.status(400).json({ error: `Invalid ${name.slice(0, -1)} payload` }); const items = db[name][req.userId!] ?? []; const i = items.findIndex(x => x.id === req.params.id); if (i < 0) return res.status(404).json({ error: 'Record not found' }); items[i] = { ...items[i], ...req.body, id: items[i].id, createdAt: items[i].createdAt }; writeDb(); res.json(items[i]); });
-  app.delete(`/api/${name}/:id`, (req: AuthedRequest, res) => { const items = db[name][req.userId!] ?? []; const next = items.filter(x => x.id !== req.params.id); if (next.length === items.length) return res.status(404).json({ error: 'Record not found' }); db[name][req.userId!] = next; writeDb(); res.status(204).end(); });
+function collection<T extends { id: string; createdAt: number }>(
+  name: 'transactions' | 'budgets' | 'goals',
+  prefix: string,
+  validate: (x: unknown) => x is CollectionPayload<T>,
+  getItems: (userId: string) => T[],
+  setItems: (userId: string, items: T[]) => void,
+) {
+  app.get(`/api/${name}`, (req: AuthedRequest, res) => { const q = typeof req.query.q === 'string' ? req.query.q.toLowerCase() : ''; const items = getItems(req.userId!); res.json(q ? items.filter(x => JSON.stringify(x).toLowerCase().includes(q)) : items); });
+  app.post(`/api/${name}`, (req: AuthedRequest, res) => { if (!body(req, res)) return; const payload: unknown = req.body; if (!validate(payload)) return res.status(400).json({ error: `Invalid ${name.slice(0, -1)} payload` }); const item = { ...payload, id: makeId(prefix), createdAt: Date.now() } as T; const items = getItems(req.userId!); items.unshift(item); setItems(req.userId!, items); writeDb(); res.status(201).json(item); });
+  app.put(`/api/${name}/:id`, (req: AuthedRequest, res) => { if (!body(req, res)) return; const payload: unknown = req.body; if (!validate(payload)) return res.status(400).json({ error: `Invalid ${name.slice(0, -1)} payload` }); const items = getItems(req.userId!); const i = items.findIndex(x => x.id === req.params.id); if (i < 0) return res.status(404).json({ error: 'Record not found' }); items[i] = { ...items[i], ...payload, id: items[i].id, createdAt: items[i].createdAt }; setItems(req.userId!, items); writeDb(); res.json(items[i]); });
+  app.delete(`/api/${name}/:id`, (req: AuthedRequest, res) => { const items = getItems(req.userId!); const next = items.filter(x => x.id !== req.params.id); if (next.length === items.length) return res.status(404).json({ error: 'Record not found' }); setItems(req.userId!, next); writeDb(); res.status(204).end(); });
 }
-collection<Transaction>('transactions', 'tx', x => ['income', 'expense'].includes(x.type) && !!x.date && !!x.category && !!x.description && nonNegative(x.amount));
-collection<Budget>('budgets', 'bg', x => !!x.category && nonNegative(x.monthlyLimit));
-collection<SavingsGoal>('goals', 'goal', x => !!x.name && nonNegative(x.targetAmount) && nonNegative(x.currentAmount) && !!x.targetDate);
+const isTransaction = (x: unknown): x is CollectionPayload<Transaction> =>
+  isRecord(x) &&
+  (x.type === 'income' || x.type === 'expense') &&
+  typeof x.date === 'string' &&
+  /^\d{4}-\d{2}-\d{2}$/.test(x.date) &&
+  typeof x.category === 'string' &&
+  typeof x.description === 'string' &&
+  typeof x.paymentMethod === 'string' &&
+  nonNegative(x.amount);
+const isBudget = (x: unknown): x is CollectionPayload<Budget> =>
+  isRecord(x) && typeof x.category === 'string' && nonNegative(x.monthlyLimit) &&
+  (x.month === undefined || (typeof x.month === 'string' && /^\d{4}-\d{2}$/.test(x.month)));
+const isSavingsGoal = (x: unknown): x is CollectionPayload<SavingsGoal> =>
+  isRecord(x) &&
+  typeof x.name === 'string' &&
+  nonNegative(x.targetAmount) &&
+  nonNegative(x.currentAmount) &&
+  typeof x.targetDate === 'string' &&
+  /^\d{4}-\d{2}-\d{2}$/.test(x.targetDate);
+collection<Transaction>('transactions', 'tx', isTransaction, userId => db.transactions[userId] ?? [], (userId, items) => { db.transactions[userId] = items; });
+collection<Budget>('budgets', 'bg', isBudget, userId => db.budgets[userId] ?? [], (userId, items) => { db.budgets[userId] = items; });
+collection<SavingsGoal>('goals', 'goal', isSavingsGoal, userId => db.goals[userId] ?? [], (userId, items) => { db.goals[userId] = items; });
 app.post('/api/goals/:id/funds', (req: AuthedRequest, res) => { const amount = req.body?.amount; if (!nonNegative(amount) || amount === 0) return res.status(400).json({ error: 'A positive amount is required' }); const goal = (db.goals[req.userId!] ?? []).find(g => g.id === req.params.id); if (!goal) return res.status(404).json({ error: 'Goal not found' }); goal.currentAmount += amount; writeDb(); res.json(goal); });
 
 function totals(items: Transaction[]) { const income = items.filter(t => t.type === 'income').reduce((s, t) => s + t.amount, 0); const expense = items.filter(t => t.type === 'expense').reduce((s, t) => s + t.amount, 0); return { income, expense, balance: income - expense }; }
-app.get('/api/dashboard', (req: AuthedRequest, res) => { const d = data(req); res.json({ profile: d.profile, transactions: d.transactions.slice(0, 10), budgets: d.budgets, goals: d.goals, totals: totals(d.transactions), counts: { transactions: d.transactions.length, budgets: d.budgets.length, goals: d.goals.length } }); });
+app.get('/api/dashboard', (req: AuthedRequest, res) => { const d = data(req); res.json({ profile: d.profile, transactions: d.transactions, budgets: d.budgets, goals: d.goals, totals: totals(d.transactions), counts: { transactions: d.transactions.length, budgets: d.budgets.length, goals: d.goals.length } }); });
 app.get('/api/reports/summary', (req: AuthedRequest, res) => { const month = typeof req.query.month === 'string' ? req.query.month : new Date().toISOString().slice(0, 7); const items = data(req).transactions.filter(t => t.date.startsWith(month)); const byCategory = items.filter(t => t.type === 'expense').reduce<Record<string, number>>((a, t) => { a[t.category] = (a[t.category] ?? 0) + t.amount; return a; }, {}); res.json({ month, ...totals(items), byCategory, transactionCount: items.length }); });
 app.get('/api/export', (req: AuthedRequest, res) => { const d = data(req); res.json({ version: '1.0', exportedAt: new Date().toISOString(), profile: d.profile, transactions: d.transactions, budgets: d.budgets, goals: d.goals }); });
 app.post('/api/data/demo', (req: AuthedRequest, res) => { db.transactions[req.userId!] = INITIAL_TRANSACTIONS.map(x => ({ ...x })); db.budgets[req.userId!] = INITIAL_BUDGETS.map(x => ({ ...x })); db.goals[req.userId!] = INITIAL_GOALS.map(x => ({ ...x })); writeDb(); res.json(data(req)); });

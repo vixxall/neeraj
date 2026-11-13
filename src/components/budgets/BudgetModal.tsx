@@ -5,7 +5,7 @@ import { Modal } from '../common/Modal';
 interface BudgetModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onSave: (budget: Omit<Budget, 'id' | 'createdAt'> & { id?: string }) => void;
+  onSave: (budget: Omit<Budget, 'id' | 'createdAt'> & { id?: string }) => Promise<boolean>;
   initialBudget?: Budget | null;
   existingCategories?: ExpenseCategory[];
   currency?: string;
@@ -33,6 +33,7 @@ export const BudgetModal: React.FC<BudgetModalProps> = ({
   const [category, setCategory] = useState<ExpenseCategory>('Food');
   const [limit, setLimit] = useState<string>('');
   const [error, setError] = useState<string>('');
+  const [isSaving, setIsSaving] = useState(false);
 
   useEffect(() => {
     if (initialBudget) {
@@ -45,7 +46,7 @@ export const BudgetModal: React.FC<BudgetModalProps> = ({
     setError('');
   }, [initialBudget, isOpen]);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     const numLimit = parseFloat(limit);
     if (!limit || isNaN(numLimit) || numLimit <= 0) {
@@ -53,13 +54,17 @@ export const BudgetModal: React.FC<BudgetModalProps> = ({
       return;
     }
 
-    onSave({
-      ...(initialBudget?.id ? { id: initialBudget.id } : {}),
-      category,
-      monthlyLimit: numLimit,
-    });
-
-    onClose();
+    setIsSaving(true);
+    try {
+      const saved = await onSave({
+        ...(initialBudget?.id ? { id: initialBudget.id } : {}),
+        category,
+        monthlyLimit: numLimit,
+      });
+      if (saved) onClose();
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   return (
@@ -121,9 +126,10 @@ export const BudgetModal: React.FC<BudgetModalProps> = ({
           </button>
           <button
             type="submit"
-            className="cartoon-btn-primary px-5 py-2 text-xs"
+            disabled={isSaving}
+            className="cartoon-btn-primary px-5 py-2 text-xs disabled:opacity-70"
           >
-            {initialBudget ? 'Update Budget' : 'Save Budget'}
+            {isSaving ? 'Saving...' : initialBudget ? 'Update Budget' : 'Save Budget'}
           </button>
         </div>
       </form>
